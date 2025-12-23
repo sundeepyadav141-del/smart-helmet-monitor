@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Helmet Monitor</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { AlertCircle, Activity, Wind, Bell, RefreshCw, TrendingUp, BarChart3, History, Calendar, Download } = lucide;
+
+        const HelmetMonitorApp = () => {
+          const [channelId, setChannelId] = useState('');
+          const [readApiKey, setReadApiKey] = useState('');
+          const [isConfigured, setIsConfigured] = useState(false);
+          const [data, setData] = useState([]);
+          const [latestData, setLatestData] = useState(null);
+          const [loading, setLoading] = useState(false);
+          const [currentTime, setCurrentTime] = useState(new Date());
+          const [showHistory, setShowHistory] = useState(false);
+          const [historyFilter, setHistoryFilter] = useState('all');
+          const [stats, setStats] = useState({
+            totalAlerts: 0,
+            drowsinessAlerts: 0,
+            alcoholAlerts: 0
+          });
+
+          useEffect(() => {
+            const saved = localStorage.getItem('helmetConfig');
+            if (saved) {
+              const config = JSON.parse(saved);
+              setChannelId(config.channelId);
+              setReadApiKey(config.readApiKey);
+              setIsConfigured(true);
+              fetchData(config.channelId, config.readApiKey);
+            }
+          }, []);
+
+          useEffect(() => {
+            const timer = setInterval(() => {
+              setCurrentTime(new Date());
+            }, 1000);
+            return () => clearInterval(timer);
+          }, []);
+
+          useEffect(() => {
+            if (isConfigured) {
+              const interval = setInterval(() => {
+                fetchData(channelId, readApiKey);
+              }, 20000);
+              return () => clearInterval(interval);
+            }
+          }, [isConfigured, channelId, readApiKey]);
+
+          const saveConfig = () => {
+            if (channelId && readApiKey) {
+              localStorage.setItem('helmetConfig', JSON.stringify({ channelId, readApiKey }));
+              setIsConfigured(true);
+              fetchData(channelId, readApiKey);
+            }
+          };
+
+          const fetchData = async (cId, apiKey) => {
+            setLoading(true);
+            try {
+              const url = `https://api.thingspeak.com/channels/${cId}/feeds.json?api_key=${apiKey}&results=100`;
+              const response = await fetch(url);
+              const result = await response.json();
+              
+              if (result.feeds && result.feeds.length > 0) {
+                setData(result.feeds);
+                setLatestData(result.feeds[result.feeds.length - 1]);
+                
+                const drowsyCount = result.feeds.filter(f => f.field1 === '1').length;
+                const alcoholCount = result.feeds.filter(f => f.field2 === '1').length;
+                
+                setStats({
+                  totalAlerts: drowsyCount + alcoholCount,
+                  drowsinessAlerts: drowsyCount,
+                  alcoholAlerts: alcoholCount
+                });
+              }
+            } catch (error) {
+              console.error('Error fetching data:', error);
+            }
+            setLoading(false);
+          };
+
+          const resetConfig = () => {
+            localStorage.removeItem('helmetConfig');
+            setIsConfigured(false);
+            setChannelId('');
+            setReadApiKey('');
+            setData([]);
+            setLatestData(null);
+          };
+
+          const formatDateTime = (date) => {
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            
+            const dayName = days[date.getDay()];
+            const day = date.getDate();
+            const month = months[date.getMonth()];
+            const year = date.getFullYear();
+            
+            let hours = date.getHours();
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+            const seconds = date.getSeconds().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12 || 12;
+            
+            return {
+              date: `${dayName}, ${day} ${month} ${year}`,
+              time: `${hours}:${minutes}:${seconds} ${ampm}`
+            };
+          };
+
+          const getFilteredData = () => {
+            switch (historyFilter) {
+              case 'drowsy':
+                return data.filter(entry => entry.field1 === '1');
+              case 'alcohol':
+                return data.filter(entry => entry.field2 === '1');
+              case 'alerts':
+                return data.filter(entry => entry.field1 === '1' || entry.field2 === '1');
+              default:
+                return data;
+            }
+          };
+
+          const downloadHistory = () => {
+            const csvContent = [
+              ['Timestamp', 'Date', 'Time', 'Drowsiness', 'Alcohol', 'EAR Value', 'Alcohol PPM'],
+              ...data.map(entry => {
+                const date = new Date(entry.created_at);
+                return [
+                  entry.created_at,
+                  date.toLocaleDateString(),
+                  date.toLocaleTimeString(),
+                  entry.field1 === '1' ? 'Yes' : 'No',
+                  entry.field2 === '1' ? 'Yes' : 'No',
+                  entry.field3 || 'N/A',
+                  entry.field4 || '0'
+                ];
+              })
+            ].map(row => row.join(',')).join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `helmet-history-${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+          };
+
+          if (!isConfigured) {
+            return (
+              <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 p-4 flex items-center justify-center">
+                <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                  <div className="text-center mb-6">
+                    <div className="bg-blue-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Activity className="text-white" size={32} />
+                    </div>
+                    <h1 className="text-2xl font-bold text-gray-800">Smart Helmet Monitor</h1>
+                    <p className="text-gray-600 mt-2">Configure your ThingSpeak connection</p>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Channel ID</label>
+                      <input
+                        type="text"
+                        value={channelId}
+                        onChange={(e) => setChannelId(e.target.value)}
+                        placeholder="Enter your Channel ID"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Read API Key</label>
+                      <input
+                        type="text"
+                        value={readApiKey}
+                        onChange={(e) => setReadApiKey(e.target.value)}
+                        placeholder="Enter your Read API Key"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    
+                    <button
+                      onClick={saveConfig}
+                      className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                    >
+                      Connect to Helmet
+                    </button>
+                    
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4">
+                      <p className="text-sm text-blue-800">
+                        <strong>How to get these values:</strong><br/>
+                        1. Go to your ThingSpeak channel<br/>
+                        2. Channel ID is shown at the top<br/>
+                        3. Read API Key is in the "API Keys" tab
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          const isDrowsy = latestData?.field1 === '1';
+          const isAlcohol = latestData?.field2 === '1';
+          const hasAlert = isDrowsy || isAlcohol;
+          const { date: currentDate, time: currentTimeStr } = formatDateTime(currentTime);
+          const filteredData = getFilteredData();
+
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 p-4">
+              <div className="max-w-4xl mx-auto">
+                <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-blue-600 w-12 h-12 rounded-full flex items-center justify-center">
+                        <Activity className="text-white" size={24} />
+                      </div>
+                      <div>
+                        <h1 className="text-xl font-bold text-gray-800">Smart Helmet Monitor</h1>
+                        <p className="text-sm text-gray-600">Real-time rider safety</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => fetchData(channelId, readApiKey)} disabled={loading} className="p-2 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors">
+                        <RefreshCw size={20} className={`text-blue-600 ${loading ? 'animate-spin' : ''}`} />
+                      </button>
+                      <button onClick={resetConfig} className="px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
+                        Settings
+                      </button>
+                      <button onClick={() => setShowHistory(!showHistory)} className="p-2 bg-green-100 rounded-lg hover:bg-green-200 transition-colors" title="View History">
+                        <History size={20} className="text-green-600" />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-600">Current Date</p>
+                        <p className="text-lg font-semibold text-gray-800">{currentDate}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-600">Current Time</p>
+                        <p className="text-2xl font-bold text-blue-600 tabular-nums">{currentTimeStr}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {hasAlert && (
+                  <div className={`rounded-2xl shadow-xl p-6 mb-4 ${isDrowsy && isAlcohol ? 'bg-red-600' : isDrowsy ? 'bg-orange-500' : 'bg-yellow-500'}`}>
+                    <div className="flex items-center gap-3">
+                      <Bell size={32} className="text-white animate-pulse" />
+                      <div>
+                        <h2 className="text-xl font-bold text-white">
+                          {isDrowsy && isAlcohol ? '⚠️ CRITICAL ALERT!' : '⚠️ WARNING!'}
+                        </h2>
+                        <p className="text-white text-sm">
+                          {isDrowsy && isAlcohol ? 'Drowsiness & Alcohol Detected!' : isDrowsy ? 'Drowsiness Detected!' : 'Alcohol Detected!'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className={`rounded-xl shadow-lg p-6 ${isDrowsy ? 'bg-orange-500' : 'bg-white'}`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <AlertCircle size={24} className={isDrowsy ? 'text-white' : 'text-orange-500'} />
+                      <h3 className={`font-semibold ${isDrowsy ? 'text-white' : 'text-gray-800'}`}>Drowsiness</h3>
+                    </div>
+                    <p className={`text-3xl font-bold ${isDrowsy ? 'text-white' : 'text-gray-800'}`}>
+                      {isDrowsy ? 'ALERT' : 'Normal'}
+                    </p>
+                    <p className={`text-sm ${isDrowsy ? 'text-white' : 'text-gray-600'}`}>
+                      EAR: {latestData?.field3 || 'N/A'}
+                    </p>
+                  </div>
+
+                  <div className={`rounded-xl shadow-lg p-6 ${isAlcohol ? 'bg-red-500' : 'bg-white'}`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <Wind size={24} className={isAlcohol ? 'text-white' : 'text-red-500'} />
+                      <h3 className={`font-semibold ${isAlcohol ? 'text-white' : 'text-gray-800'}`}>Alcohol</h3>
+                    </div>
+                    <p className={`text-3xl font-bold ${isAlcohol ? 'text-white' : 'text-gray-800'}`}>
+                      {isAlcohol ? 'DETECTED' : 'Normal'}
+                    </p>
+                    <p className={`text-sm ${isAlcohol ? 'text-white' : 'text-gray-600'}`}>
+                      PPM: {latestData?.field4 || '0'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <BarChart3 size={24} className="text-blue-600" />
+                    <h3 className="text-lg font-bold text-gray-800">Statistics</h3>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="text-center">
+                      <p className="text-3xl font-bold text-blue-600">{stats.totalAlerts}</p>
+                      <p className="text-sm text-gray-600">Total Alerts</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-3xl font-bold text-orange-500">{stats.drowsinessAlerts}</p>
+                      <p className="text-sm text-gray-600">Drowsiness</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-3xl font-bold text-red-500">{stats.alcoholAlerts}</p>
+                      <p className="text-sm text-gray-600">Alcohol</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl shadow-xl p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <TrendingUp size={24} className="text-blue-600" />
+                    <h3 className="text-lg font-bold text-gray-800">Recent Activity</h3>
+                  </div>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {data.slice(-10).reverse().map((entry, index) => {
+                      const hasDrowsy = entry.field1 === '1';
+                      const hasAlcohol = entry.field2 === '1';
+                      const time = new Date(entry.created_at).toLocaleString();
+                      
+                      return (
+                        <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">{time}</p>
+                            <p className="text-xs text-gray-600">
+                              {hasDrowsy && '🟠 Drowsy '}{hasAlcohol && '🔴 Alcohol'}
+                              {!hasDrowsy && !hasAlcohol && '✅ Normal'}
+                            </p>
+                          </div>
+                          {(hasDrowsy || hasAlcohol) && (
+                            <div className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-semibold">
+                              Alert
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="text-center mt-4 text-white text-sm">
+                  Last updated: {latestData ? new Date(latestData.created_at).toLocaleString() : 'Never'}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<HelmetMonitorApp />);
+    </script>
+</body>
+</html>
